@@ -38,6 +38,8 @@ body {
     align-items: center;
     justify-content: center;
     user-select: none;
+    -webkit-user-select: none;  /* Prevents text selection on iOS/Safari */
+    -webkit-tap-highlight-color: transparent; /* Removes tap highlight on iOS */
 }
 
 .dpad-button:hover {
