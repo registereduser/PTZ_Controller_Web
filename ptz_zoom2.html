@@ -142,17 +142,21 @@ var currentSpeed = { pan: 0, tilt: 0 };
 function init() {
     // ** MQTT CONNECTION CONFIGURATION **
     var host = "broker.hivemq.com";
-    var port = 8000;
+    var port = 8884; // Standard secure WebSocket port for HiveMQ
     var clientId = "WebClient-" + parseInt(Math.random() * 100);
 
     // Paho.MQTT.Client constructor: (host, port, path, clientId)
-    client = new Paho.MQTT.Client(host, port, "/mqtt", clientId);
+    // IMPORTANT: Note the change to use '/mqtt' path here for secure connection
+    client = new Paho.MQTT.Client(host, port, "/mqtt", clientId); 
 
     client.onConnectionLost = onConnectionLost;
     client.onMessageArrived = onMessageArrived;
 
-    client.connect({onSuccess:onConnect});
-
+    // Connect, explicitly setting useSSL to true
+    client.connect({
+        onSuccess:onConnect,
+        useSSL: true // <-- THIS IS THE CRUCIAL CHANGE
+    });
     // Delay loop start until connection is confirmed
     setTimeout(checkConnectionAndStartLoop, 1000);
 }
