@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Simple PTZ Button Control</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: #f0f0f0;
+    padding: 20px;
+}
+
+/* New D-Pad Container Styling */
+#dpadContainer {
+    display: grid;
+    grid-template-columns: repeat(3, 80px); /* Three columns, 80px wide each */
+    grid-template-rows: repeat(3, 80px); /* Three rows, 80px high each */
+    gap: 5px;
+    margin: 30px 0;
+}
+
+/* D-Pad Button Styling */
+.dpad-button {
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 8px;
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 1.2em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+}
+
+.dpad-button:hover {
+    background-color: #0056b3;
+}
+
+.dpad-stop {
+    background-color: #dc3545; /* Red for stop */
+}
+
+.dpad-stop:hover {
+    background-color: #c82333;
+}
+
+#rxConsole {
+    width: 350px;
+    height: 150px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    resize: none;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+    margin-bottom: 10px;
+}
+
+#speedDisplay {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-right: 10px;
+    width: 250px;
+    text-align: center;
+    font-weight: bold;
+}
+
+#secretCode {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-right: 10px;
+    width: 250px;
+}
+
+/* Generic button style kept for the manual send button */
+button {
+    padding: 8px 15px;
+    border: none;
+    border-radius: 4px;
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+</style>
+<script>
+// JoyStick code has been removed as it's no longer used.
+
+var client;
+var commandTopic = "ptz/commands/cam1";
+var lastPan = NaN;
+var lastTilt = NaN;
+
+// ** NEW: Store the desired speed from the D-pad buttons **
+// We'll use a fixed speed of 50 for simplicity.
+var FIXED_SPEED = 5;
+var currentSpeed = { pan: 0, tilt: 0 };
+
+function init() {
+    // ** MQTT CONNECTION CONFIGURATION **
+    var host = "broker.hivemq.com";
+    var port = 8000;
+    var clientId = "WebClient-" + parseInt(Math.random() * 100);
+
+    // Paho.MQTT.Client constructor: (host, port, path, clientId)
+    client = new Paho.MQTT.Client(host, port, "/mqtt", clientId);
+
+    client.onConnectionLost = onConnectionLost;
+    client.onMessageArrived = onMessageArrived;
+
+    // Connect without authentication for now, but ensure the server requires it
+    client.connect({onSuccess:onConnect});
+
+    // joy = new JoyStick('joyDiv', { autoReturnToCenter: true }); // REMOVED
+
+    // Delay loop start until connection is confirmed
+    setTimeout(checkConnectionAndStartLoop, 1000);
+}
+
+function checkConnectionAndStartLoop() {
+    if (client.isConnected()) {
+        document.getElementById("rxConsole").value += "Connection confirmed. Starting PTZ button control loop.\n";
+
+        // Start the continuous control loop
+        setInterval(sendProportionalCommand, 100); // Send command every 200ms
+
+    } else {
+        // If connection not yet established, retry check
+        setTimeout(checkConnectionAndStartLoop, 500);
+    }
+}
+
+function onConnect() {
+    document.getElementById("rxConsole").value += "Connected to MQTT Broker!\n";
+    client.subscribe("ptz/status/#");
+}
+
+function onConnectionLost(responseObject) {
+    if (responseObject.errorCode !== 0) {
+        document.getElementById("rxConsole").value += "Connection lost: " + responseObject.errorMessage + "\n";
+    }
+}
+
+function onMessageArrived(message) {
+    // Only display the last few lines
+    var console = document.getElementById("rxConsole");
+    console.value += "RX: [" + message.destinationName + "] " + message.payloadString + "\n";
+    console.scrollTop = console.scrollHeight;
+}
+
+// ** NEW: Sets the desired speed for continuous movement **
+function movePTZ(direction) {
+    // Reset to stop first
+    currentSpeed.pan = 0;
+    currentSpeed.tilt = 0;
+
+    switch (direction) {
+        case 'left':
+            currentSpeed.pan = -FIXED_SPEED; // Left
+            break;
+        case 'right':
+            currentSpeed.pan = FIXED_SPEED;  // Right
+            break;
+        case 'up':
+            currentSpeed.tilt = -FIXED_SPEED; // Up (Joystick Y is inverted)
+            break;
+        case 'down':
+            currentSpeed.tilt = FIXED_SPEED; // Down (Joystick Y is inverted)
+            break;
+        // 'stop' handled by stopPTZ
+    }
+}
+
+// ** NEW: Sets speed to zero to stop movement **
+function stopPTZ() {
+    currentSpeed.pan = 0;
+    currentSpeed.tilt = 0;
+}
+
+
+// *** MODIFIED CORE FUNCTION: SENDS COMMAND BASED ON currentSpeed ***
+function sendProportionalCommand() {
+    if (!client || !client.isConnected()) return;
+
+    var panSpeed = currentSpeed.pan;
+    var tiltSpeed = currentSpeed.tilt;
+
+    var isZero = (panSpeed === 0 && tiltSpeed === 0);
+    var wasLastZero = (lastPan === 0 && lastTilt === 0);
+
+    // Prevent repetition of {"pan":0, "tilt":0} if movement is already stopped.
+    if (isZero && wasLastZero) {
+        return;
+    }
+
+    // 2. Get the secret code
+    var secretCode = document.getElementById("secretCode").value;
+
+    // 3. Create the JSON payload
+    var messagePayload = JSON.stringify({
+        pan: panSpeed,
+        tilt: tiltSpeed,
+        auth: secretCode
+    });
+
+    // 4. Update the display bar
+    document.getElementById("speedDisplay").value = "Pan: " + panSpeed + ", Tilt: " + tiltSpeed;
+
+    // 5. Send the message
+    var message = new Paho.MQTT.Message(messagePayload);
+    message.destinationName = commandTopic;
+    client.send(message);
+
+    // 3. Update the last sent values
+    lastPan = panSpeed;
+    lastTilt = tiltSpeed;
+}
+
+// Function to send a manually typed command (optional, kept for debugging)
+function sendText() {
+    var text = document.getElementById("txBar").value;
+    var secretCode = document.getElementById("secretCode").value;
+
+    var manualPayload = JSON.stringify({
+        cmd: text,
+        auth: secretCode
+    });
+
+    if (client && client.isConnected()) {
+        var message = new Paho.MQTT.Message(manualPayload);
+        message.destinationName = commandTopic;
+        client.send(message);
+    }
+    document.getElementById("txBar").value = "";
+}
+</script>
+</head>
+<body onload="javascript:init()">
+
+<h1>Simple PTZ Button Control</h1>
+
+<div>
+    <textarea id="rxConsole" readonly></textarea>
+</div>
+
+<div style="margin-bottom: 15px;">
+    <input type="password" id="secretCode" placeholder="Enter Secret PTZ Code" />
+</div>
+
+<div id="dpadContainer">
+    <div></div> <button class="dpad-button" onmousedown="movePTZ('up')" ontouchstart="movePTZ('up')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Tilt Up">⬆️</button>
+    <div></div> <button class="dpad-button" onmousedown="movePTZ('left')" ontouchstart="movePTZ('left')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Pan Left">⬅️</button>
+    <button class="dpad-button dpad-stop" onmousedown="stopPTZ()" ontouchstart="stopPTZ()" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Stop">🛑</button>
+    <button class="dpad-button" onmousedown="movePTZ('right')" ontouchstart="movePTZ('right')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Pan Right">➡️</button>
+
+    <div></div> <button class="dpad-button" onmousedown="movePTZ('down')" ontouchstart="movePTZ('down')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Tilt Down">⬇️</button>
+    <div></div> </div>
+<div style="margin-top: 15px;">
+    <input type="text" id="speedDisplay" readonly value="Pan: 0, Tilt: 0" />
+</div>
+
+<div style="margin-top: 15px;">
+    <input type="text" id="txBar" onkeydown="if(event.keyCode == 13) sendText();" placeholder="Manual Command (e.g., Calibrate)" />
+    <button onclick="sendText()">Send Manual</button>
+</div>
+
+<hr style="width: 100%; border: none; border-top: 1px solid #ccc; margin-top: 20px;" />
+</body>
+</html>

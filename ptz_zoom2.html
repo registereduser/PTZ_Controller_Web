@@ -1,0 +1,395 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Full PTZ Control</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    background-color: #f0f0f0;
+    padding: 20px;
+}
+
+/* New D-Pad Container Styling - Restored 3x3 layout */
+#dpadContainer {
+    display: grid;
+    grid-template-columns: repeat(3, 80px); /* Three columns, 80px wide each */
+    grid-template-rows: repeat(3, 80px); /* Three rows, 80px high each */
+    gap: 5px;
+    margin: 30px 0;
+}
+
+/* D-Pad Button Styling */
+.dpad-button {
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    border: none;
+    border-radius: 8px;
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+    font-size: 1.2em;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+}
+
+.dpad-button:hover {
+    background-color: #0056b3;
+}
+
+.dpad-stop {
+    background-color: #dc3545; /* Red for stop */
+}
+
+.dpad-stop:hover {
+    background-color: #c82333;
+}
+
+/* Empty grid cells for D-pad shape */
+.dpad-empty {
+    visibility: hidden;
+}
+
+#rxConsole {
+    width: 350px;
+    height: 150px;
+    padding: 10px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    resize: none;
+    box-shadow: inset 0 1px 3px rgba(0,0,0,0.1);
+    margin-bottom: 10px;
+}
+
+#speedDisplay {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-right: 10px;
+    width: 250px;
+    text-align: center;
+    font-weight: bold;
+}
+
+#secretCode {
+    padding: 8px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    margin-right: 10px;
+    width: 250px;
+}
+
+/* Generic button style kept for the manual send button */
+button {
+    padding: 8px 15px;
+    border: none;
+    border-radius: 4px;
+    background-color: #007bff;
+    color: white;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+
+/* New Lens Control Group Styling */
+.lens-control-group {
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 20px;
+    padding: 10px;
+    border: 1px solid #ccc;
+    border-radius: 8px;
+    width: 350px;
+}
+
+.lens-control-group h3 {
+    margin: 0 0 10px 0;
+    color: #333;
+}
+
+.lens-control-group .btn-row button {
+    background-color: #28a745; /* Green */
+    margin: 5px;
+}
+
+.lens-control-group .btn-row.focus-iris button {
+    background-color: #ffc107; /* Yellow */
+}
+</style>
+<script>
+// ===============================================
+// == GLOBAL VARIABLES (CRITICAL FOR LINKING) ==
+// ===============================================
+var client;
+var commandTopic = "ptz/commands/cam1";
+var lastPan = NaN;
+var lastTilt = NaN;
+
+var FIXED_SPEED = 5;
+var currentSpeed = { pan: 0, tilt: 0 };
+
+
+function init() {
+    // ** MQTT CONNECTION CONFIGURATION **
+    var host = "broker.hivemq.com";
+    var port = 8000;
+    var clientId = "WebClient-" + parseInt(Math.random() * 100);
+
+    // Paho.MQTT.Client constructor: (host, port, path, clientId)
+    client = new Paho.MQTT.Client(host, port, "/mqtt", clientId);
+
+    client.onConnectionLost = onConnectionLost;
+    client.onMessageArrived = onMessageArrived;
+
+    client.connect({onSuccess:onConnect});
+
+    // Delay loop start until connection is confirmed
+    setTimeout(checkConnectionAndStartLoop, 1000);
+}
+
+function checkConnectionAndStartLoop() {
+    // Check if the client object is connected AND initialized
+    if (client && client.isConnected()) {
+        document.getElementById("rxConsole").value += "Connection confirmed. Starting PTZ control loop.\n";
+
+        // Start the continuous control loop (200ms rate)
+        setInterval(sendProportionalCommand, 100);
+
+    } else {
+        // If connection not yet established, retry check
+        setTimeout(checkConnectionAndStartLoop, 500);
+    }
+}
+
+function onConnect() {
+    document.getElementById("rxConsole").value += "Connected to MQTT Broker!\n";
+    client.subscribe("ptz/status/#");
+}
+
+function onConnectionLost(responseObject) {
+    if (responseObject.errorCode !== 0) {
+        document.getElementById("rxConsole").value += "Connection lost: " + responseObject.errorMessage + "\n";
+    }
+}
+
+function onMessageArrived(message) {
+    var console = document.getElementById("rxConsole");
+    console.value += "RX: [" + message.destinationName + "] " + message.payloadString + "\n";
+    console.scrollTop = console.scrollHeight;
+}
+
+// ** MOVEMENT CONTROL FUNCTIONS **
+function movePTZ(direction) {
+    // Reset to stop first
+    currentSpeed.pan = 0;
+    currentSpeed.tilt = 0;
+
+    switch (direction) {
+        case 'left':
+            currentSpeed.pan = -FIXED_SPEED; // Left
+            break;
+        case 'right':
+            currentSpeed.pan = FIXED_SPEED;  // Right
+            break;
+        case 'up':
+            currentSpeed.tilt = -FIXED_SPEED; // Up (Y is inverted)
+            break;
+        case 'down':
+            currentSpeed.tilt = FIXED_SPEED; // Down
+            break;
+    }
+}
+
+function stopPTZ() {
+    currentSpeed.pan = 0;
+    currentSpeed.tilt = 0;
+}
+
+
+// *** CORE FUNCTION: SENDS PAN/TILT COMMAND ***
+function sendProportionalCommand() {
+    // Check for client connection before proceeding
+    if (!client || !client.isConnected()) return;
+
+    var panSpeed = currentSpeed.pan;
+    var tiltSpeed = currentSpeed.tilt;
+
+    var isZero = (panSpeed === 0 && tiltSpeed === 0);
+    var wasLastZero = (lastPan === 0 && lastTilt === 0);
+
+    // Prevent repetition of STOP command if already stopped
+    if (isZero && wasLastZero) {
+        return;
+    }
+
+    var secretCode = document.getElementById("secretCode").value;
+
+    // JSON payload for proportional control
+    var messagePayload = JSON.stringify({
+        pan: panSpeed,
+        tilt: tiltSpeed,
+        auth: secretCode
+    });
+
+    document.getElementById("speedDisplay").value = "Pan: " + panSpeed + ", Tilt: " + tiltSpeed;
+
+    var message = new Paho.MQTT.Message(messagePayload);
+    message.destinationName = commandTopic;
+    client.send(message);
+
+    lastPan = panSpeed;
+    lastTilt = tiltSpeed;
+}
+
+// ** MANUAL COMMAND HANDLERS **
+
+/**
+ * Sends a manual string command (e.g., 'Zoom(Tele)', 'SetPreset(1)').
+ * @param {string} commandString - The full command string.
+ */
+function sendCommand(commandString) {
+    // Ensure D-pad movement stops before sending a static command
+    stopPTZ();
+
+    if (!client || !client.isConnected()) return;
+
+    var secretCode = document.getElementById("secretCode").value;
+
+    // JSON payload for manual text command
+    var manualPayload = JSON.stringify({
+        cmd: commandString,
+        auth: secretCode
+    });
+
+    var message = new Paho.MQTT.Message(manualPayload);
+    message.destinationName = commandTopic;
+    client.send(message);
+
+    document.getElementById("rxConsole").value += "TX CMD: " + commandString + "\n";
+    document.getElementById("rxConsole").scrollTop = document.getElementById("rxConsole").scrollHeight;
+}
+
+
+function sendCustomCommand() {
+    var text = document.getElementById("txBar").value;
+    if (text) {
+        // Send command and also send a STOP packet afterward for safety
+        sendCommand(text);
+
+        // If the command is NOT explicitly 'STOP', send a follow-up STOP
+        if (text.toUpperCase() !== 'STOP') {
+            setTimeout(() => sendCommand('STOP'), 50);
+        }
+
+        document.getElementById("txBar").value = "";
+    }
+}
+
+function sendPresetCommand(commandType) {
+    var presetId = document.getElementById('presetId').value;
+    if (presetId) {
+        var command = `${commandType}(${presetId})`;
+        sendCommand(command);
+    }
+}
+
+</script>
+</head>
+<body onload="javascript:init()">
+
+<h1>Full PTZ Control</h1>
+
+<div>
+    <textarea id="rxConsole" readonly></textarea>
+</div>
+
+<div style="margin-bottom: 15px;">
+    <input type="password" id="secretCode" placeholder="Enter Secret PTZ Code" value="" />
+</div>
+
+<div style="display: flex; gap: 20px; justify-content: center;">
+
+    <div>
+        <h2>Pan/Tilt</h2>
+        <div id="dpadContainer">
+            <div class="dpad-empty"></div>
+            <button class="dpad-button" onmousedown="movePTZ('up')" ontouchstart="movePTZ('up')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Tilt Up">⬆️</button>
+            <div class="dpad-empty"></div>
+
+            <button class="dpad-button" onmousedown="movePTZ('left')" ontouchstart="movePTZ('left')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Pan Left">⬅️</button>
+            <button class="dpad-button dpad-stop" onmousedown="stopPTZ()" ontouchstart="stopPTZ()" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Stop">🛑</button>
+            <button class="dpad-button" onmousedown="movePTZ('right')" ontouchstart="movePTZ('right')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Pan Right">➡️</button>
+
+            <div class="dpad-empty"></div>
+            <button class="dpad-button" onmousedown="movePTZ('down')" ontouchstart="movePTZ('down')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Tilt Down">⬇️</button>
+            <div class="dpad-empty"></div>
+        </div>
+        <input type="text" id="speedDisplay" readonly value="Pan: 0, Tilt: 0" />
+    </div>
+
+    <div>
+        <h2>Lens & Presets</h2>
+
+        <div class="lens-control-group">
+            <h3>Zoom</h3>
+            <div class="btn-row">
+                <button onclick="sendCommand('Zoom(Tele)')">Zoom Tele (+)</button>
+                <button onclick="sendCommand('Zoom(Wide)')">Zoom Wide (-)</button>
+            </div>
+        </div>
+
+        <div class="lens-control-group">
+            <h3>Focus</h3>
+            <div class="btn-row">
+                <button onclick="sendCommand('Focus(Far)')">Focus Far</button>
+                <button onclick="sendCommand('Focus(Near)')">Focus Near</button>
+            </div>
+            <div class="btn-row focus-iris">
+                <button onclick="sendCommand('Focus(Auto)')">Focus Auto</button>
+                <button onclick="sendCommand('Focus(Manual)')">Focus Manual</button>
+            </div>
+        </div>
+
+        <div class="lens-control-group">
+            <h3>Iris</h3>
+            <div class="btn-row">
+                <button onclick="sendCommand('Iris(Open)')">Iris Open</button>
+                <button onclick="sendCommand('Iris(Close)')">Iris Close</button>
+            </div>
+            <div class="btn-row focus-iris">
+                <button onclick="sendCommand('Iris(Auto)')">Iris Auto</button>
+                <button onclick="sendCommand('Iris(Manual)')">Iris Manual</button>
+            </div>
+        </div>
+
+        <div class="lens-control-group">
+            <h3>Presets</h3>
+            <div class="btn-row">
+                <input type="text" id="presetId" value="1" style="width: 40px; text-align: center; margin-right: 5px;">
+                <button onclick="sendPresetCommand('SetPreset')">Set Preset</button>
+                <button onclick="sendPresetCommand('CallPreset')">Call Preset</button>
+            </div>
+        </div>
+
+        <div class="lens-control-group">
+            <h3>Manual / Config</h3>
+            <input type="text" id="txBar" onkeydown="if(event.keyCode == 13) sendCustomCommand();" placeholder="e.g., STOP, SetProtocol(P)" />
+            <button style="margin-top: 5px;" onclick="sendCustomCommand()">Send Custom</button>
+        </div>
+
+    </div>
+
+</div>
+<hr style="width: 100%; border: none; border-top: 1px solid #ccc; margin-top: 20px;" />
+</body>
+</html>
