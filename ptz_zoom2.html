@@ -252,6 +252,7 @@ function sendProportionalCommand() {
     }
 
     var secretCode = document.getElementById("secretCode").value;
+    var cameraId = document.getElementById("cameraId").value; // Get the camera ID from the input field
 
     // JSON payload for proportional control
     var messagePayload = JSON.stringify({
