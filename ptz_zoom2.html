@@ -198,6 +198,11 @@ function onMessageArrived(message) {
     var console = document.getElementById("rxConsole");
     console.value += "RX: [" + message.destinationName + "] " + message.payloadString + "\n";
     console.scrollTop = console.scrollHeight;
+
+    // Check if the message is for the external IP address
+    if (message.destinationName === "ptz/status/external_ip") {
+        document.getElementById("externalIpDisplay").innerText = "External IP: " + message.payloadString;
+    }
 }
 
 // ** MOVEMENT CONTROL FUNCTIONS **
@@ -278,18 +283,20 @@ function sendCommand(commandString) {
     if (!client || !client.isConnected()) return;
 
     var secretCode = document.getElementById("secretCode").value;
+    var cameraId = document.getElementById("cameraId").value; // Get the camera ID from the input field
 
     // JSON payload for manual text command
     var manualPayload = JSON.stringify({
         cmd: commandString,
-        auth: secretCode
+        auth: secretCode,
+        cameraId: parseInt(cameraId) // Include the camera ID in the payload
     });
 
     var message = new Paho.MQTT.Message(manualPayload);
     message.destinationName = commandTopic;
     client.send(message);
 
-    document.getElementById("rxConsole").value += "TX CMD: " + commandString + "\n";
+    document.getElementById("rxConsole").value += "TX CMD: " + commandString + " (Camera ID: " + cameraId + ")\n";
     document.getElementById("rxConsole").scrollTop = document.getElementById("rxConsole").scrollHeight;
 }
 
@@ -331,6 +338,11 @@ function sendPresetCommand(commandType) {
     <input type="password" id="secretCode" placeholder="Enter Secret PTZ Code" value="" />
 </div>
 
+<div>
+    <label for="cameraId">Camera ID:</label>
+    <input type="number" id="cameraId" value="1" min="1" max="255">
+</div>
+
 <div style="margin-bottom: 15px;">
     <label for="speedInput">Speed:</label>
     <input type="number" id="speedInput" value="5" min="1" max="50" />
@@ -338,6 +350,10 @@ function sendPresetCommand(commandType) {
 
 <div style="margin-bottom: 15px;">
     <button onclick="sendCommand('CheckForUpdate')">Check for Update</button>
+</div>
+
+<div id="externalIpDisplay" style="margin-top: 20px; font-size: 1.2em; color: #333;">
+    External IP: Fetching...
 </div>
 
 <div style="display: flex; gap: 20px; justify-content: center;">
