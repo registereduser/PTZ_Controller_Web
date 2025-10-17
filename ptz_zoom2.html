@@ -38,8 +38,6 @@ body {
     align-items: center;
     justify-content: center;
     user-select: none;
-    -webkit-user-select: none;  /* Prevents text selection on iOS/Safari */
-    -webkit-tap-highlight-color: transparent; /* Removes tap highlight on iOS */
 }
 
 .dpad-button:hover {
@@ -127,6 +125,13 @@ button:hover {
 .lens-control-group .btn-row.focus-iris button {
     background-color: #ffc107; /* Yellow */
 }
+
+/* Version Display Styling */
+#versionDisplay {
+    margin-top: 20px;
+    font-size: 1.2em;
+    color: #333;
+}
 </style>
 <script>
 // ===============================================
@@ -137,30 +142,40 @@ var commandTopic = "ptz/commands/cam1";
 var lastPan = NaN;
 var lastTilt = NaN;
 
-var FIXED_SPEED = 1;
+var FIXED_SPEED = 5;
 var currentSpeed = { pan: 0, tilt: 0 };
-
 
 function init() {
     // ** MQTT CONNECTION CONFIGURATION **
     var host = "broker.hivemq.com";
-    var port = 8884; // Standard secure WebSocket port for HiveMQ
+    var port = 8000;
     var clientId = "WebClient-" + parseInt(Math.random() * 100);
 
     // Paho.MQTT.Client constructor: (host, port, path, clientId)
-    // IMPORTANT: Note the change to use '/mqtt' path here for secure connection
-    client = new Paho.MQTT.Client(host, port, "/mqtt", clientId); 
+    client = new Paho.MQTT.Client(host, port, "/mqtt", clientId);
 
     client.onConnectionLost = onConnectionLost;
     client.onMessageArrived = onMessageArrived;
 
-    // Connect, explicitly setting useSSL to true
-    client.connect({
-        onSuccess:onConnect,
-        useSSL: true // <-- THIS IS THE CRUCIAL CHANGE
-    });
+    client.connect({onSuccess:onConnect});
+
     // Delay loop start until connection is confirmed
     setTimeout(checkConnectionAndStartLoop, 1000);
+
+    // Connect to version topic
+    connectToVersionTopic();
+}
+
+function connectToVersionTopic() {
+    const versionTopic = "ptz/version";
+
+    client.onMessageArrived = function(message) {
+        if (message.destinationName === versionTopic) {
+            document.getElementById("versionDisplay").innerText = "Version: " + message.payloadString;
+        }
+    };
+
+    client.subscribe(versionTopic);
 }
 
 function checkConnectionAndStartLoop() {
@@ -200,18 +215,20 @@ function movePTZ(direction) {
     currentSpeed.pan = 0;
     currentSpeed.tilt = 0;
 
+    const speed = parseInt(document.getElementById("speedInput").value) || 5;
+
     switch (direction) {
         case 'left':
-            currentSpeed.pan = -FIXED_SPEED; // Left
+            currentSpeed.pan = -speed; // Left
             break;
         case 'right':
-            currentSpeed.pan = FIXED_SPEED;  // Right
+            currentSpeed.pan = speed; // Right
             break;
         case 'up':
-            currentSpeed.tilt = -FIXED_SPEED; // Up (Y is inverted)
+            currentSpeed.tilt = -speed; // Up (Y is inverted)
             break;
         case 'down':
-            currentSpeed.tilt = FIXED_SPEED; // Down
+            currentSpeed.tilt = speed; // Down
             break;
     }
 }
@@ -323,6 +340,11 @@ function sendPresetCommand(commandType) {
     <input type="password" id="secretCode" placeholder="Enter Secret PTZ Code" value="" />
 </div>
 
+<div style="margin-bottom: 15px;">
+    <label for="speedInput">Speed:</label>
+    <input type="number" id="speedInput" value="5" min="1" max="10" />
+</div>
+
 <div style="display: flex; gap: 20px; justify-content: center;">
 
     <div>
@@ -393,16 +415,10 @@ function sendPresetCommand(commandType) {
             <button style="margin-top: 5px;" onclick="sendCustomCommand()">Send Custom</button>
         </div>
 
-        <div class="lens-control-group">
-    <h3>Wiper</h3>
-    <div class="btn-row">
-        <button onclick="sendCommand('Wiper(On)')">Wiper On</button>
-        <button onclick="sendCommand('Wiper(Off)')">Wiper Off</button>
-    </div>
-</div>
     </div>
 
 </div>
 <hr style="width: 100%; border: none; border-top: 1px solid #ccc; margin-top: 20px;" />
+<div id="versionDisplay">Version: Loading...</div>
 </body>
 </html>
