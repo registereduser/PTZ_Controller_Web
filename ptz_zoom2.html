@@ -257,7 +257,8 @@ function sendProportionalCommand() {
     var messagePayload = JSON.stringify({
         pan: panSpeed,
         tilt: tiltSpeed,
-        auth: secretCode
+        auth: secretCode,
+        cameraId: parseInt(cameraId) // Include the camera ID in the payload
     });
 
     document.getElementById("speedDisplay").value = "Pan: " + panSpeed + ", Tilt: " + tiltSpeed;
