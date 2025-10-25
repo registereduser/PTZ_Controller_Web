@@ -234,6 +234,15 @@ function stopPTZ() {
     currentSpeed.tilt = 0;
 }
 
+/**
+ * Sets speed to zero and immediately forces the proportional command to be sent.
+ * This guarantees an instantaneous STOP packet transmission.
+ */
+function sendImmediateStop() {
+    lastPan = -1; // just to force the send of the stop again
+    stopPTZ(); // Set state variables to 0
+    sendProportionalCommand(); // Force send the 0, 0 command instantly
+}
 
 // *** CORE FUNCTION: SENDS PAN/TILT COMMAND ***
 function sendProportionalCommand() {
@@ -368,7 +377,13 @@ function sendPresetCommand(commandType) {
             <div class="dpad-empty"></div>
 
             <button class="dpad-button" onmousedown="movePTZ('left')" ontouchstart="movePTZ('left')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Pan Left">⬅️</button>
-            <button class="dpad-button dpad-stop" onmousedown="stopPTZ()" ontouchstart="stopPTZ()" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Stop">🛑</button>
+<!-- UPDATED STOP BUTTON TO USE sendImmediateStop -->
+            <button class="dpad-button dpad-stop" 
+                onmousedown="sendImmediateStop()" 
+                ontouchstart="sendImmediateStop()" 
+                onmouseup="sendImmediateStop()" 
+                ontouchend="sendImmediateStop()" 
+                title="Stop">STOP</button>
             <button class="dpad-button" onmousedown="movePTZ('right')" ontouchstart="movePTZ('right')" onmouseup="stopPTZ()" ontouchend="stopPTZ()" title="Pan Right">➡️</button>
 
             <div class="dpad-empty"></div>
